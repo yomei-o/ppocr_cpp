@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ppocr_cpp — ブラウザで日本語OCR（PP-OCRv5 / スクラッチ C++ / WASM）</title>
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fafafa; --line:#ccc; --accent:#c33; --ok:#1a8; --dim:#888; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; --bg:#181818; --line:#444; --accent:#f66; --ok:#3db; --dim:#999; } }
+  body { font-family: system-ui, "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+         margin: 0 auto; padding: 16px; max-width: 1100px; color: var(--fg); background: var(--bg); }
+  h1 { font-size: 1.2rem; margin: 0 0 6px; }
+  p.sub { margin: 0 0 14px; opacity: .85; font-size: .85rem; line-height: 1.6; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  button, select, input[type=file] { padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px;
+                   background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  #stage { position: relative; display: inline-block; max-width: 100%; }
+  video, canvas { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
+  #overlay { position: absolute; left: 0; top: 0; border: none; }
+  #status { font-size: .85rem; opacity: .85; min-height: 1.2em; margin: 6px 0; }
+  #lines { display: grid; grid-template-columns: 2.2em 1fr 4em; gap: 2px 10px; font-size: .95rem;
+           margin: 10px 0; align-items: baseline; }
+  #lines .i { color: var(--dim); font-variant-numeric: tabular-nums; font-size: .8rem; }
+  #lines .t { font-weight: 600; }
+  #lines .c { color: var(--dim); font-size: .78rem; font-variant-numeric: tabular-nums; }
+  #lines .pending { color: var(--dim); font-weight: 400; }
+  #plain { width: 100%; min-height: 6em; font: .9rem/1.6 ui-monospace, Consolas, monospace;
+           background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 6px;
+           padding: 8px; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; font-size: .78rem;
+         opacity: .75; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 12px;
+         max-height: 11em; overflow-y: auto; }
+  label { font-size: .85rem; }
+  details { font-size: .85rem; margin: 8px 0; }
+  progress { width: 220px; }
+</style>
+
+<h1>ppocr_cpp — ブラウザで日本語OCR</h1>
+<p class="sub">
+  PP-OCRv5 mobile の <b>検出（DB）+ 認識（SVTR / CTC, 18385 クラス）</b>を、
+  <b>onnxruntime を使わない自前 C++ の ONNX インタプリタ</b>で動かしています（WASM）。
+  ONNX は fetch して<b>ブラウザ内だけで推論</b>し、<b>画像はどこにも送信されません</b>。<br>
+  縦書きは 4 隅の矩形が縦長なら 90° 回して読みます。文字テーブルは日本語・簡体字・繁体字・英数を含む共通のもの。<br>
+  <b>速度は正直に言って遅いです</b>: 長辺 960 の検出で数秒、そのあと 1 行ごとに 0.2〜1 秒。
+  行が多い画像では検出直後に枠だけ先に出して、読めた行から順に埋めていきます。急ぐなら長辺を 640 に落としてください。
+</p>
+
+<div class="row">
+  <input type="file" id="file" accept="image/*">
+  <button id="btn-cam">カメラを開く</button>
+  <button id="btn-sample">サンプル画像</button>
+  <button id="btn-run" class="primary" disabled>読む</button>
+  <button id="btn-save" disabled>PNG 保存</button>
+</div>
+<div class="row">
+  <label>検出の長辺
+    <select id="limit">
+      <option value="960">960（既定・精度重視）</option>
+      <option value="736">736</option>
+      <option value="640">640（軽い）</option>
+      <option value="480">480（かなり軽い・小さい字を落とす）</option>
+      <option value="1280">1280（重い・小さい字に強い）</option>
+    </select>
+  </label>
+  <label>box_thresh <input type="number" id="boxth" value="0.6" step="0.05" min="0" max="1" style="width:5em"></label>
+  <label>unclip <input type="number" id="unclip" value="1.5" step="0.1" min="1" max="3" style="width:5em"></label>
+  <label>drop <input type="number" id="drop" value="0.5" step="0.05" min="0" max="1" style="width:5em"></label>
+  <progress id="prog" value="0" max="1" hidden></progress>
+</div>
+
+<div id="stage">
+  <video id="video" playsinline muted hidden></video>
+  <canvas id="canvas"></canvas>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="status">モデルを読み込んでいます…（約 21 MB）</div>
+<div id="lines"></div>
+
+<details>
+  <summary>テキストだけ / JSON</summary>
+  <textarea id="plain" spellcheck="false"></textarea>
+</details>
+
+<div id="log"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas'), overlay = $('overlay'), video = $('video');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const octx = overlay.getContext('2d');
+const MODELS = {
+  det: '../models/ppocrv5-mobile-det.onnx',
+  rec: '../models/ppocrv5-mobile-rec.onnx',
+  dict: '../models/ppocrv5_dict.txt',
+};
+let worker = null, ready = false, boxes = [], texts = [], stream = null, busy = false;
+
+function log(s) { $('log').textContent += s + '\n'; $('log').scrollTop = 1e9; }
+function status(s) { $('status').textContent = s; }
+
+async function fetchWithProgress(url, label) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(label + ' の取得に失敗 (' + res.status + ')');
+  const total = Number(res.headers.get('content-length') || 0);
+  if (!total || !res.body) return await res.arrayBuffer();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    status(label + ' ' + (got / 1048576).toFixed(1) + ' / ' + (total / 1048576).toFixed(1) + ' MB');
+  }
+  const out = new Uint8Array(got);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out.buffer;
+}
+
+function drawBoxes(highlight) {
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  octx.lineWidth = Math.max(1, Math.round(overlay.width / 500));
+  for (let i = 0; i < boxes.length; ++i) {
+    const q = boxes[i].quad;
+    octx.strokeStyle = texts[i] ? 'rgba(30,190,140,.95)'
+                     : (i === highlight ? 'rgba(240,180,60,.95)' : 'rgba(200,60,60,.75)');
+    octx.beginPath();
+    octx.moveTo(q[0][0], q[0][1]);
+    for (let k = 1; k < 4; ++k) octx.lineTo(q[k][0], q[k][1]);
+    octx.closePath();
+    octx.stroke();
+  }
+}
+
+function renderLines() {
+  const el = $('lines');
+  el.innerHTML = '';
+  for (let i = 0; i < boxes.length; ++i) {
+    const idx = document.createElement('div'); idx.className = 'i'; idx.textContent = i;
+    const t = document.createElement('div');
+    t.className = 't' + (texts[i] === undefined ? ' pending' : '');
+    t.textContent = texts[i] === undefined ? '…' : (texts[i] === '' ? '（不採用）' : texts[i]);
+    const c = document.createElement('div'); c.className = 'c';
+    c.textContent = texts[i] ? (boxes[i].conf + '%') : '';
+    el.append(idx, t, c);
+  }
+  $('plain').value = texts.filter((s) => s).join('\n');
+}
+
+function setImage(src, w, h) {
+  canvas.width = overlay.width = w;
+  canvas.height = overlay.height = h;
+  ctx.drawImage(src, 0, 0, w, h);
+  octx.clearRect(0, 0, w, h);
+  boxes = []; texts = [];
+  renderLines();
+  $('btn-run').disabled = !ready;
+  $('btn-save').disabled = true;
+}
+
+async function loadFile(f) {
+  const img = new Image();
+  img.src = URL.createObjectURL(f);
+  await img.decode();
+  setImage(img, img.naturalWidth, img.naturalHeight);
+  status(img.naturalWidth + 'x' + img.naturalHeight + ' — 「読む」を押してください');
+}
+
+$('file').onchange = (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+
+$('btn-sample').onclick = async () => {
+  const img = new Image();
+  img.src = '../assets/japan_2.jpg';
+  try { await img.decode(); } catch (e) { status('サンプル画像が見つかりません'); return; }
+  setImage(img, img.naturalWidth, img.naturalHeight);
+  status('サンプル ' + img.naturalWidth + 'x' + img.naturalHeight + ' — 「読む」を押してください');
+};
+
+$('btn-cam').onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 } }, audio: false });
+  } catch (e) { status('カメラを開けません: ' + e.message); return; }
+  video.srcObject = stream;
+  video.hidden = false;
+  canvas.hidden = true;
+  await video.play();
+  $('btn-cam').textContent = 'この瞬間を撮る';
+  $('btn-cam').onclick = () => {
+    video.hidden = true;
+    canvas.hidden = false;
+    setImage(video, video.videoWidth, video.videoHeight);
+    stream.getTracks().forEach((t) => t.stop());
+    status('撮影しました — 「読む」を押してください');
+  };
+};
+
+$('btn-save').onclick = () => {
+  const out = document.createElement('canvas');
+  out.width = canvas.width; out.height = canvas.height;
+  const c = out.getContext('2d');
+  c.drawImage(canvas, 0, 0);
+  c.drawImage(overlay, 0, 0);
+  const a = document.createElement('a');
+  a.href = out.toDataURL('image/png');
+  a.download = 'ppocr.png';
+  a.click();
+};
+
+$('btn-run').onclick = () => {
+  if (!ready || busy || !canvas.width) return;
+  busy = true;
+  $('btn-run').disabled = true;
+  const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  status('検出中…');
+  $('prog').hidden = false;
+  $('prog').value = 0;
+  worker.postMessage({
+    type: 'run', pixels: px.data.buffer, w: canvas.width, h: canvas.height,
+    limit: Number($('limit').value), thresh: 0.3,
+    boxThresh: Number($('boxth').value), unclip: Number($('unclip').value),
+    drop: Number($('drop').value),
+  }, [px.data.buffer]);
+};
+
+(async function boot() {
+  worker = new Worker('worker.js');
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'log') { log(m.text); return; }
+    if (m.type === 'error') { status('エラー: ' + m.text); log('ERROR ' + m.text); busy = false;
+                              $('btn-run').disabled = false; return; }
+    if (m.type === 'ready') {
+      ready = m.det > 0 && m.rec > 0;
+      status(ready ? '準備完了 — 画像を選ぶかカメラを開いてください'
+                   : 'モデルの読み込みに失敗しました');
+      $('btn-run').disabled = !(ready && canvas.width);
+      return;
+    }
+    if (m.type === 'boxes') {
+      const j = JSON.parse(m.json);
+      boxes = j.boxes;
+      texts = new Array(boxes.length);
+      $('prog').max = Math.max(1, boxes.length);
+      status(boxes.length + ' 行を検出（' + Math.round(m.ms) + ' ms, ' + j.det[0] + 'x' + j.det[1]
+             + ' で推論）— 読み取り中…');
+      drawBoxes(0);
+      renderLines();
+      return;
+    }
+    if (m.type === 'line') {
+      texts[m.index] = m.conf > 0 ? m.text : '';
+      if (boxes[m.index]) boxes[m.index].conf = m.conf;
+      $('prog').value = m.index + 1;
+      drawBoxes(m.index + 1);
+      renderLines();
+      return;
+    }
+    if (m.type === 'done') {
+      const j = JSON.parse(m.json);
+      status('完了: ' + j.lines.length + ' 行 / ' + (m.ms / 1000).toFixed(1) + ' 秒');
+      $('plain').value = j.lines.map((l) => l.text).join('\n') + '\n\n' + m.json;
+      $('prog').hidden = true;
+      busy = false;
+      $('btn-run').disabled = false;
+      $('btn-save').disabled = false;
+      return;
+    }
+  };
+
+  try {
+    const det = await fetchWithProgress(MODELS.det, '検出モデル');
+    const rec = await fetchWithProgress(MODELS.rec, '認識モデル');
+    const dictBuf = await fetchWithProgress(MODELS.dict, '文字テーブル');
+    const dict = new TextDecoder('utf-8').decode(new Uint8Array(dictBuf));
+    status('WASM を初期化中…');
+    worker.postMessage({ type: 'init', det, rec, dict }, [det, rec]);
+  } catch (e) {
+    status('読み込み失敗: ' + e.message);
+  }
+})();
+</script>
+</html>

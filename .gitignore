@@ -1,0 +1,7 @@
+*.exe
+scratch/
+scratch_*
+*.o
+*.obj
+*.pdb
+__pycache__/

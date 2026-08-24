@@ -30,14 +30,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join("scratch", "wasm_page.png"))
     ap.add_argument("--port", type=int, default=8731)
+    ap.add_argument("--url", default=None, help="test a deployed page instead of a local server")
     ap.add_argument("--limit", default="640")
     ap.add_argument("--timeout", type=int, default=600)
     args = ap.parse_args()
 
     from playwright.sync_api import sync_playwright
 
-    httpd = serve(args.port)
-    url = "http://127.0.0.1:%d/wasm/" % args.port
+    httpd = serve(args.port) if not args.url else None
+    url = args.url or ("http://127.0.0.1:%d/wasm/" % args.port)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
 
     with sync_playwright() as pw:
@@ -52,6 +53,10 @@ def main():
                                timeout=args.timeout * 1000)
         page.select_option("#limit", args.limit)
         page.click("#btn-sample")
+        # wait for the image itself, not for the button: the button being enabled is a weaker
+        # condition and clicking early runs the detector on a blank canvas (0 lines, instantly).
+        page.wait_for_function("() => document.getElementById('canvas').width > 600",
+                               timeout=args.timeout * 1000)
         page.wait_for_function("() => !document.getElementById('btn-run').disabled")
         page.click("#btn-run")
         page.wait_for_function("() => document.getElementById('status').textContent.startsWith('完了')",
@@ -73,7 +78,8 @@ def main():
         page.screenshot(path=args.out, full_page=True)
         browser.close()
 
-    httpd.shutdown()
+    if httpd:
+        httpd.shutdown()
     print("status  :", info["status"])
     print("canvas  : backing %s  rendered %.0fx%.0f  border %s  separate overlay: %s"
           % (geom["backing"], geom["rendered"][0], geom["rendered"][1], geom["border"],

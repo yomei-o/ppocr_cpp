@@ -105,6 +105,10 @@ const MODELS = {
   dict: '../models/ppocrv5_dict.txt',
 };
 let worker = null, ready = false, boxes = [], texts = [], stream = null, busy = false;
+// A fresh <canvas> reports width 300 whether or not anything was drawn into it, so
+// `canvas.width` is not a usable "is there an image?" test — it enables the run button
+// before there is anything to read and the detector dutifully finds nothing in a blank frame.
+let hasImage = false;
 
 function log(s) { $('log').textContent += s + '\n'; $('log').scrollTop = 1e9; }
 function status(s) { $('status').textContent = s; }
@@ -167,6 +171,7 @@ function setImage(from, w, h) {
   sctx.drawImage(from, 0, 0, w, h);
   ctx.drawImage(src, 0, 0);
   boxes = []; texts = [];
+  hasImage = true;
   renderLines();
   $('btn-run').disabled = !ready;
   $('btn-save').disabled = true;
@@ -217,7 +222,7 @@ $('btn-save').onclick = () => {
 };
 
 $('btn-run').onclick = () => {
-  if (!ready || busy || !canvas.width) return;
+  if (!ready || busy || !hasImage) return;
   busy = true;
   $('btn-run').disabled = true;
   const px = sctx.getImageData(0, 0, src.width, src.height);   // clean pixels, never the drawn boxes
@@ -243,7 +248,7 @@ $('btn-run').onclick = () => {
       ready = m.det > 0 && m.rec > 0;
       status(ready ? '準備完了 — 画像を選ぶかカメラを開いてください'
                    : 'モデルの読み込みに失敗しました');
-      $('btn-run').disabled = !(ready && canvas.width);
+      $('btn-run').disabled = !(ready && hasImage);
       return;
     }
     if (m.type === 'boxes') {

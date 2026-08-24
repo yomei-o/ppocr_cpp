@@ -34,13 +34,15 @@ Eigen 3 (Core only, flattened into single-directory includes) — MPL2. See `COP
 
 ## Engine lineage
 
-`pure/onnx.hpp`, `pure/autograd.hpp`, `pure/nd.hpp`, `pure/ops2d.hpp`, `pure/face_ops.hpp`,
-`pure/linalg.hpp`, `pure/bn.hpp`, `pure/ops_yolox.hpp`, `pure/backend.hpp`, `pure/parallel.hpp`
+`pure/onnx.hpp`, `pure/autograd.hpp`, `pure/nd.hpp`, `pure/backend.hpp` and `pure/parallel.hpp`
 come from this author's own sibling repositories (`cudnn_cpp`, `yolov8_cpp`, `yolo_lpr_cpp`) and are
 BSD 3-Clause like the rest of this repository. Two of them carry a local change:
 `pure/parallel.hpp` adds the `PURE_SERIAL` build switch, and `pure/autograd.hpp` adds
 `infer_only()` so `make_tensor` can skip the grad buffer. The rest are unmodified, so the sibling
-repos and this one stay diffable.
+repos and this one stay diffable. The sibling repos' other op headers (`ops2d.hpp`, `face_ops.hpp`,
+`linalg.hpp`, `bn.hpp`, `ops_yolox.hpp`) are deliberately NOT vendored here: `pure/ew.hpp` and
+`pure/onnx_run.hpp` replaced everything this pipeline used out of them, so carrying them would be
+dead code in a repository whose whole point is what it actually implements.
 
 ## Python-side reference only
 

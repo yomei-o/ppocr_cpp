@@ -21,11 +21,6 @@
 #pragma once
 #include "onnx.hpp"
 #include "autograd.hpp"
-#include "ops2d.hpp"       // reshape, mul_scalar, add_scalar, softmax_rows
-#include "ops_yolox.hpp"   // dwconv2d
-#include "face_ops.hpp"    // relu, conv2d_hw, pad_hw, gap, add_rowvec
-#include "linalg.hpp"      // matmul, transpose2d
-#include "bn.hpp"          // batchnorm2d
 #include "nd.hpp"          // rank-agnostic transpose/softmax/slice/concat
 #include "ew.hpp"          // forward-only elementwise (see that header: the tape ops do not vectorize)
 #include <chrono>
@@ -90,20 +85,6 @@ inline bool is_trailing_bcast(const Tensor& a, const Tensor& b) {
 }
 
 // ---- ONNX ops the engine did not already have --------------------------------------------------
-
-// Pad with independent begin/end on H and W (ONNX Conv pads = [t, l, b, r]).
-inline Tensor pad_hw4(const Tensor& x, int64_t t, int64_t l, int64_t b, int64_t r) {
-  int64_t N = x->shape[0], C = x->shape[1], H = x->shape[2], W = x->shape[3];
-  int64_t OH = H + t + b, OW = W + l + r;
-  Tensor o = make_tensor({N, C, OH, OW}, false);
-  for (int64_t nc = 0; nc < N * C; ++nc)
-    for (int64_t h = 0; h < H; ++h) {
-      const float* src = &x->data[(nc * H + h) * W];
-      float* dst = &o->data[(nc * OH + (h + t)) * OW + l];
-      for (int64_t w = 0; w < W; ++w) dst[w] = src[w];
-    }
-  return nograd(o);
-}
 
 // Conv with independent stride/pad/kernel per axis. The engine's own conv2d only takes one stride
 // and one pad, which is fine for square-everything detectors but not for a text recognizer: this
@@ -687,8 +668,11 @@ inline std::map<std::string, Tensor> run_graph(const Graph& g,
       put_f(outn[0], matmul_nd(R.f(in[0]), R.f(in[1])));
     } else if (op == "Gemm") {
       Tensor a = R.f(in[0]), W = R.f(in[1]);
-      Tensor prod = attr_i(node, "transB", 0) ? matmul(a, transpose2d(W)) : matmul(a, W);
-      put_f(outn[0], (in.size() >= 3 && !in[2].empty()) ? add_rowvec(prod, R.f(in[2])) : prod);
+      Tensor B = attr_i(node, "transB", 0) ? nd::transpose(W, {1, 0}) : W;
+      Tensor prod = matmul_nd(a, B);
+      put_f(outn[0], (in.size() >= 3 && !in[2].empty())
+                         ? ew::bcast_trailing(prod, R.f(in[2]), [](float x, float y) { return x + y; })
+                         : prod);
     } else if (op == "Softmax") {
       Tensor a = R.f(in[0]);
       int64_t axis = attr_i(node, "axis", a->shape.size() == 2 ? 1 : -1);

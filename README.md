@@ -32,6 +32,10 @@ PaddleOCR の **PP-OCRv5 mobile**（検出 DB + 認識 SVTR/CTC・18385 クラ�
 | CTC | 文字テーブル構築 + greedy デコード | `pure/ctc.hpp` |
 | 演算 | conv / 転置conv / プーリング / GEMM / softmax / LayerNorm 分解 ほか | `pure/ew.hpp`, `pure/onnx_run.hpp`, `pure/nd.hpp` |
 
+`pure/` は **13 ファイル**（うち継承分は `onnx.hpp` / `autograd.hpp` / `nd.hpp` / `backend.hpp` /
+`parallel.hpp` の 5 つだけ）。姉妹リポジトリの他の op ヘッダは、`ew.hpp` と `onnx_run.hpp` が
+このパイプラインで使う分を全部置き換えたので**意図的に持ち込んでいない**。
+
 依存は **stb_image（画像デコード）と vendored Eigen（GEMM・任意）だけ**。
 onnxruntime も OpenCV も pyclipper も使わない。
 

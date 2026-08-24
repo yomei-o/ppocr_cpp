@@ -6,7 +6,8 @@ PaddleOCR の **PP-OCRv5 mobile**（検出 DB + 認識 SVTR/CTC・18385 クラ�
 
 姉妹リポジトリ: [yolo_lpr_cpp](https://github.com/yomei-o/yolo_lpr_cpp)（ナンバープレート）/
 [crowd_cpp](https://github.com/yomei-o/crowd_cpp)（群衆検知）/
-[cudnn_cpp](https://github.com/yomei-o/cudnn_cpp)（エンジン本体）。
+[cudnn_cpp](https://github.com/yomei-o/cudnn_cpp)（エンジン本体）/
+**[tesseractocr_cpp](https://github.com/yomei-o/tesseractocr_cpp)（Tesseract 5 を同じ土俵で・比較用）**。
 `pure/onnx.hpp`（protobuf コーデック）と `pure/nd.hpp` などはこの系列から引き継ぎ、
 **PP-OCR に必要な op と後処理をこのリポジトリで足した**。
 
@@ -181,6 +182,22 @@ PP-OCRv5 の認識モデルは**日本語・簡体字・繁体字・英数・拼
 `Shape → Slice → Concat → Reshape` で自分の reshape 先を実行時に計算する。float だけの
 インタプリタでは `Shape` の出力すら表現できないため、shape 計算は別の int64 ストアに載せ、
 `Slice` / `Concat` / `Squeeze` / `Gather` / `Cast` はどちらのストアに居るかで分岐する。
+
+## Tesseract 5 との比較
+
+[tesseractocr_cpp](https://github.com/yomei-o/tesseractocr_cpp) に Tesseract 5.5.3（LSTM のみ）を
+同じ形で用意して、**同じ画像・既知の正解**で測った（あちらの `tools/compare.py`）。
+CER は空白除去・行順無視。
+
+| 画像 | ppocr_cpp (PP-OCRv5) | tesseract jpn_fast | tesseract jpn_best |
+|---|---|---|---|
+| 横書きの文書（正解 214 文字） | **0.014** | 0.098 | 0.089 |
+| 縦書き（正解 25 文字） | 0.640 | 1.000 | — |
+| 縦書き（`jpn_vert` を使うと） | 0.640 | **0.080** | — |
+
+**横書きはこちらが 7 倍正確、縦書きは Tesseract の圧勝**（縦書き専用の学習データがある）。
+速度と配布サイズは Tesseract が有利（1.4 s / 4.4 MB 対 9.2 s / 21 MB）。
+用途で選ぶべきで、どちらかが一方的に良いという話ではない。
 
 ## 限界（分かっていて残していること）
 

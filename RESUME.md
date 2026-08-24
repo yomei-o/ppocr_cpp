@@ -44,6 +44,7 @@ sh build/emcc.sh wasm/ppocr_wasm.cpp -o wasm/ppocr.js
 | `wasm/ppocr_wasm.cpp` | 検出と認識を**別関数で**公開 | 1 回の run で返すと 10 秒間なにも出ない |
 | `tools/ppocr_ref.py` | 参照実装（onnxruntime + cv2 + pyclipper） | C++ の移植ではない。だから比較に意味がある |
 | `tools/parity.py` | テンソル段 + パイプライン段の比較 | **op を足したら必ず走らせる** |
+| `tools/wasm_smoke.py` | playwright で実ブラウザに読ませて撮る | **ページを触ったら必ず走らせる** |
 
 ## 開発中に踏んだ罠（同じ穴に落ちないように）
 
@@ -58,6 +59,10 @@ sh build/emcc.sh wasm/ppocr_wasm.cpp -o wasm/ppocr.js
 5. **`--verbose` でプロファイルしてはいけない**。ノードごとの `fflush` が op より重く、
    安いノードが一番高く見える。`ppocr bench` を使う（`onx::Prof` は印字しない）。
 6. **マシンが混んでいると計測が 4 倍ぶれる**。順位だけ信じて、絶対値は空いてから測り直す。
+7. **枠を overlay canvas に重ねると位置がずれる**。`video, canvas { display: block }` が
+   `[hidden] { display: none }` を上書きし、`hidden` の `<video>` が場所を取っていた。
+   単一 canvas に描き直す方式に変更済み。`tools/wasm_smoke.py` はこれを見つけるために書いた
+   （`test_node.js` は数値しか見ないので永久に気づけない）。
 
 ## 次にやるなら（優先度順）
 
@@ -81,6 +86,7 @@ sh build/emcc.sh wasm/ppocr_wasm.cpp -o wasm/ppocr.js
 python tools/parity.py --img assets/japan_2.jpg --line assets/line_ja.png   # op を足したら必須
 python tools/parity.py --img assets/page_ja.png --line assets/line_ja.png
 node wasm/test_node.js                                                    # WASM と native の一致
+python tools/wasm_smoke.py --out scratch/wasm_page.png --limit 640        # ページを触ったら必須
 ```
 
 `assets/line_ja.png` は `assets/japan_2.jpg` の 1 行を切ったもの（`(115,216)-(567,286)`）。

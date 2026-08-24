@@ -43,7 +43,7 @@ def det_input(bgr, limit_side_len=960, limit_max=True):
     else:
         if min(h, w) < limit_side_len:
             ratio = limit_side_len / min(h, w)
-    rh, rw = int(round(h * ratio)), int(round(w * ratio))
+    rh, rw = int(h * ratio), int(w * ratio)          # truncate, then snap to a multiple of 32
     rh = max(32, int(round(rh / 32.0)) * 32)
     rw = max(32, int(round(rw / 32.0)) * 32)
     img = cv2.resize(bgr, (rw, rh))

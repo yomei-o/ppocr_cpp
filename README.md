@@ -18,6 +18,8 @@ PaddleOCR の **PP-OCRv5 mobile**（検出 DB + 認識 SVTR/CTC・18385 クラ�
 **画像はどこにも送信されない**。行数の多い画像では**検出直後に枠だけ先に出して、読めた行から順に
 埋めていく**（1 行ごとに worker から結果が返る）。
 
+[![デモ](docs/wasm_demo.png)](https://yomei-o.github.io/ppocr_cpp/wasm/)
+
 ## 何が「スクラッチ」なのか
 
 | 段 | やっていること | 実装 |
@@ -61,7 +63,11 @@ pyclipper、つまり **PaddleOCR 自身のアルゴリズムを PaddleOCR 自�
 **どちらが勝つかは画像次第**（`ジューシー` / `ューシー` はこちらが正しい）。
 
 **WASM と native も一致**: `wasm/test_node.js`（WASM）と `ppocr run`（native）は
-`japan_2.jpg` の **50 行すべてで同一の文字列**を返す。
+`japan_2.jpg` の **50 行すべてで同一の文字列**を返し、**枠の座標も 50 個すべて完全一致**する。
+
+**ページの見た目まで確認する**: `tools/wasm_smoke.py` が playwright で実際のブラウザに読ませ、
+枠の座標・canvas の実寸・スクリーンショットを取る。数値が合っていても**描画位置がずれる**バグは
+`test_node.js` では絶対に見つからない（実際に一度やった。原因は下記）。
 
 ## 実際の読み取り結果
 
@@ -132,7 +138,9 @@ EXTRA="-DUSE_EIGEN -arch:AVX2 -DPURE_SERIAL"    sh build/cc.sh  pure/ppocr.cpp -
 # WASM
 sh build/emcc.sh wasm/ppocr_wasm.cpp -o wasm/ppocr.js
 ./ppocr.exe rgba --img assets/japan_2.jpg --out scratch/sample.rgba
-node wasm/test_node.js                                          # ブラウザなしの動作確認
+node wasm/test_node.js                                          # ブラウザなしの動作確認（数値）
+python -m playwright install chromium                           # 初回だけ
+python tools/wasm_smoke.py --out scratch/wasm_page.png          # 実ブラウザで動かして撮る
 python -m http.server 8000                                      # → localhost:8000/wasm/
 
 # Python 側（参照実装とパリティ）
@@ -185,6 +193,18 @@ PP-OCRv5 の認識モデルは**日本語・簡体字・繁体字・英数・拼
 - CTC は greedy のみ。ビームサーチも言語モデルも無い。
 - 認識はバッチ 1 固定（1 行ずつ、行ごとの幅で推論）。
 - 学習はできない。このリポジトリは**推論専用**（`infer_only()` を立てて grad を確保しない）。
+
+## デモページで踏んだ罠
+
+**枠を別の canvas に重ねて描くのをやめた**。最初は画像用 canvas の上に `position:absolute` の
+overlay canvas を置いていたが、CSS に `video, canvas { display: block }` があるために
+UA スタイルシートの `[hidden] { display: none }` が上書きされ、**`hidden` にした `<video>` が
+既定の 300x150 を占めたまま画像を押し下げる**一方、overlay は `top:0` に留まって
+**枠が画像とずれた**。border と box-sizing の効き方でも同じ種類のずれが起きる。
+
+いまは**単一の canvas** に、オフスクリーンに保持した元画像を毎回描き直してから枠を描く。
+同じバッキングストア内なのでずれようがなく、`getImageData` も枠を含まないため
+**同じフレームを再実行しても検出器に自分の描いた枠を食わせない**。
 
 ## ライセンス
 

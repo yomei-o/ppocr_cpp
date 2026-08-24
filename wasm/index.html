@@ -15,9 +15,12 @@
                    background: transparent; color: inherit; font: inherit; cursor: pointer; }
   button:disabled { opacity: .45; cursor: default; }
   button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-  #stage { position: relative; display: inline-block; max-width: 100%; }
+  /* [hidden] must win. `video, canvas { display: block }` below is an author rule and would
+     otherwise override the UA stylesheet's [hidden] { display: none }, leaving a hidden <video>
+     occupying its default 300x150 box and pushing the image around. */
+  [hidden] { display: none !important; }
+  #stage { display: inline-block; max-width: 100%; }
   video, canvas { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
-  #overlay { position: absolute; left: 0; top: 0; border: none; }
   #status { font-size: .85rem; opacity: .85; min-height: 1.2em; margin: 6px 0; }
   #lines { display: grid; grid-template-columns: 2.2em 1fr 4em; gap: 2px 10px; font-size: .95rem;
            margin: 10px 0; align-items: baseline; }
@@ -72,7 +75,6 @@
 <div id="stage">
   <video id="video" playsinline muted hidden></video>
   <canvas id="canvas"></canvas>
-  <canvas id="overlay"></canvas>
 </div>
 
 <div id="status">モデルを読み込んでいます…（約 21 MB）</div>
@@ -87,9 +89,16 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const canvas = $('canvas'), overlay = $('overlay'), video = $('video');
-const ctx = canvas.getContext('2d', { willReadFrequently: true });
-const octx = overlay.getContext('2d');
+const canvas = $('canvas'), video = $('video');
+const ctx = canvas.getContext('2d');
+// The frame is kept in an offscreen canvas and the visible one is redrawn from it every time boxes
+// change. An absolutely positioned overlay canvas is the obvious alternative and it is a trap: its
+// box only lines up with the image canvas while every CSS assumption about borders, box-sizing and
+// sibling layout holds, and when one of them slips the boxes silently land somewhere else. One
+// backing store cannot drift from itself. It also keeps getImageData() free of drawn boxes, so
+// re-running on the same frame does not feed the detector its own annotations.
+const src = document.createElement('canvas');
+const sctx = src.getContext('2d', { willReadFrequently: true });
 const MODELS = {
   det: '../models/ppocrv5-mobile-det.onnx',
   rec: '../models/ppocrv5-mobile-rec.onnx',
@@ -122,17 +131,18 @@ async function fetchWithProgress(url, label) {
 }
 
 function drawBoxes(highlight) {
-  octx.clearRect(0, 0, overlay.width, overlay.height);
-  octx.lineWidth = Math.max(1, Math.round(overlay.width / 500));
+  if (!src.width) return;
+  ctx.drawImage(src, 0, 0);
+  ctx.lineWidth = Math.max(1, Math.round(canvas.width / 500));
   for (let i = 0; i < boxes.length; ++i) {
     const q = boxes[i].quad;
-    octx.strokeStyle = texts[i] ? 'rgba(30,190,140,.95)'
-                     : (i === highlight ? 'rgba(240,180,60,.95)' : 'rgba(200,60,60,.75)');
-    octx.beginPath();
-    octx.moveTo(q[0][0], q[0][1]);
-    for (let k = 1; k < 4; ++k) octx.lineTo(q[k][0], q[k][1]);
-    octx.closePath();
-    octx.stroke();
+    ctx.strokeStyle = texts[i] ? 'rgba(30,190,140,.95)'
+                    : (i === highlight ? 'rgba(240,180,60,.95)' : 'rgba(200,60,60,.75)');
+    ctx.beginPath();
+    ctx.moveTo(q[0][0], q[0][1]);
+    for (let k = 1; k < 4; ++k) ctx.lineTo(q[k][0], q[k][1]);
+    ctx.closePath();
+    ctx.stroke();
   }
 }
 
@@ -151,11 +161,11 @@ function renderLines() {
   $('plain').value = texts.filter((s) => s).join('\n');
 }
 
-function setImage(src, w, h) {
-  canvas.width = overlay.width = w;
-  canvas.height = overlay.height = h;
-  ctx.drawImage(src, 0, 0, w, h);
-  octx.clearRect(0, 0, w, h);
+function setImage(from, w, h) {
+  src.width = canvas.width = w;
+  src.height = canvas.height = h;
+  sctx.drawImage(from, 0, 0, w, h);
+  ctx.drawImage(src, 0, 0);
   boxes = []; texts = [];
   renderLines();
   $('btn-run').disabled = !ready;
@@ -200,13 +210,8 @@ $('btn-cam').onclick = async () => {
 };
 
 $('btn-save').onclick = () => {
-  const out = document.createElement('canvas');
-  out.width = canvas.width; out.height = canvas.height;
-  const c = out.getContext('2d');
-  c.drawImage(canvas, 0, 0);
-  c.drawImage(overlay, 0, 0);
   const a = document.createElement('a');
-  a.href = out.toDataURL('image/png');
+  a.href = canvas.toDataURL('image/png');       // the visible canvas already has the boxes on it
   a.download = 'ppocr.png';
   a.click();
 };
@@ -215,12 +220,12 @@ $('btn-run').onclick = () => {
   if (!ready || busy || !canvas.width) return;
   busy = true;
   $('btn-run').disabled = true;
-  const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const px = sctx.getImageData(0, 0, src.width, src.height);   // clean pixels, never the drawn boxes
   status('検出中…');
   $('prog').hidden = false;
   $('prog').value = 0;
   worker.postMessage({
-    type: 'run', pixels: px.data.buffer, w: canvas.width, h: canvas.height,
+    type: 'run', pixels: px.data.buffer, w: src.width, h: src.height,
     limit: Number($('limit').value), thresh: 0.3,
     boxThresh: Number($('boxth').value), unclip: Number($('unclip').value),
     drop: Number($('drop').value),

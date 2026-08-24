@@ -84,9 +84,12 @@ inline DetPre det_input(const Img& src, int limit_side_len = 960, bool limit_max
   } else {
     if (std::min(h, w) < limit_side_len) ratio = (double)limit_side_len / std::min(h, w);
   }
-  int rh = (int)std::lround(h * ratio), rw = (int)std::lround(w * ratio);
-  rh = std::max(32, (int)std::round(rh / 32.0) * 32);
-  rw = std::max(32, (int)std::round(rw / 32.0) * 32);
+  // int() then round-to-32, in that order: PaddleOCR truncates the scaled size and only then snaps
+  // it to a multiple of 32. Rounding first can land on the other side of a 16-pixel boundary and
+  // run the detector at a size 32 px off the reference.
+  int rh = (int)(h * ratio), rw = (int)(w * ratio);
+  rh = std::max(32, (int)std::lround(rh / 32.0) * 32);
+  rw = std::max(32, (int)std::lround(rw / 32.0) * 32);
   Img r = resize(src, rw, rh);
 
   static const float MEAN[3] = {0.485f, 0.456f, 0.406f};    // positional over BGR, see header note

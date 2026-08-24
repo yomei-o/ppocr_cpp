@@ -1,0 +1,9 @@
+# Binary assets: never line-ending converted.
+*.onnx binary
+*.wasm binary
+*.png binary
+*.jpg binary
+*.rgba binary
+
+# The character table is parsed byte-wise; keep it LF so the repo and the served copy agree.
+*.txt text eol=lf

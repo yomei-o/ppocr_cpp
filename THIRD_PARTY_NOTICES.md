@@ -45,6 +45,7 @@ repos and this one stay diffable.
 ## Python-side reference only
 
 `tools/ppocr_ref.py` and `tools/parity.py` import onnxruntime (MIT), OpenCV (Apache-2.0),
-pyclipper (BSL-1.0), Shapely (BSD-3) and NumPy (BSD-3). None of these are needed to build or run
-the C++ or WASM engine — they exist so the scratch implementation can be checked against the
-reference one.
+pyclipper (BSL-1.0), Shapely (BSD-3) and NumPy (BSD-3). `tools/wasm_smoke.py` uses Playwright
+(Apache-2.0) and `tools/make_test_image.py` uses Pillow (MIT-CMU). None of these are needed to
+build or run the C++ or WASM engine — they exist so the scratch implementation can be checked
+against the reference one, and so the demo page can be driven in a real browser.

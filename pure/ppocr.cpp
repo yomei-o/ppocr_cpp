@@ -7,6 +7,7 @@
 //
 // The same headers drive the WASM build (wasm/ppocr_wasm.cpp), so the browser runs this decode.
 #include "pipeline.hpp"
+#include "train_rec.hpp"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -42,6 +43,22 @@ static im::Img load_bgr(const std::string& path) {
   if (!p) { printf("cannot decode %s\n", path.c_str()); std::exit(1); }
   im::Img img = im::make_img(w, h, 3);
   for (int i = 0; i < w * h; ++i) {                      // stb gives RGB, the models want BGR
+    img.d[(size_t)i * 3 + 0] = p[(size_t)i * 3 + 2];
+    img.d[(size_t)i * 3 + 1] = p[(size_t)i * 3 + 1];
+    img.d[(size_t)i * 3 + 2] = p[(size_t)i * 3 + 0];
+  }
+  stbi_image_free(p);
+  return img;
+}
+
+// Same, but a file that will not decode comes back empty instead of ending the process. Training
+// walks a list that someone else wrote: one bad path should cost one sample, not an hour of work.
+static im::Img load_bgr_soft(const std::string& path) {
+  int w = 0, h = 0, ch = 0;
+  unsigned char* p = stbi_load(path.c_str(), &w, &h, &ch, 3);
+  if (!p) return im::Img{};
+  im::Img img = im::make_img(w, h, 3);
+  for (int i = 0; i < w * h; ++i) {
     img.d[(size_t)i * 3 + 0] = p[(size_t)i * 3 + 2];
     img.d[(size_t)i * 3 + 1] = p[(size_t)i * 3 + 1];
     img.d[(size_t)i * 3 + 2] = p[(size_t)i * 3 + 0];
@@ -106,7 +123,11 @@ int main(int argc, char** argv) {
            "             [--dict txt] [--verbose]\n"
            "  ppocr det  --img <file> [--out png] [--json]\n"
            "  ppocr rec  --img <file>            # one cropped text line\n"
-           "  ppocr info --onnx <file>\n");
+           "  ppocr info --onnx <file>\n"
+           "  ppocr train --data list.txt [--val list.txt] [--steps 500] [--batch 4]\n"
+           "              [--lr 1e-4] [--clip 5] [--eval-every 100] [--img-h 48]\n"
+           "              [--resume ft.bin] [--out ft.bin] [--seed 1]\n"
+           "  run/rec take [--weights ft.bin] to recognise with a fine-tune\n");
     return 1;
   }
   std::string cmd = argv[1];
@@ -115,6 +136,17 @@ int main(int argc, char** argv) {
   std::string dict_path = arg_str(argc, argv, "--dict", "models/ppocrv5_dict.txt");
   const char* img_path = arg_str(argc, argv, "--img", nullptr);
   bool verbose = arg_flag(argc, argv, "--verbose");
+  // A fine-tune is a side-car of name -> values over the original .onnx (see pure/train_rec.hpp),
+  // so using one is loading the model and then overwriting the tensors it names.
+  const char* rec_weights = arg_str(argc, argv, "--weights", nullptr);
+  auto apply_weights = [&](onx::Model& m) {
+    if (!rec_weights) return;
+    int n = 0;
+    if (trainrec::load_weights(rec_weights, m.w, &n))
+      printf("weights: %d from %s\n", n, rec_weights);
+    else
+      printf("weights: could not read %s, using the model as exported\n", rec_weights);
+  };
 
   if (cmd == "info") {
     const char* p = arg_str(argc, argv, "--onnx", det_path.c_str());
@@ -134,6 +166,55 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < v.dims.size(); ++i) printf("%s%lld", i ? "," : "", (long long)v.dims[i]);
       printf("]\n");
     }
+    return 0;
+  }
+
+  // Fine-tuning takes a label list, not a single image, so it goes before the --img check.
+  if (cmd == "train") {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    const char* list = arg_str(argc, argv, "--data", nullptr);
+    if (!list) { printf("train: --data <list.txt> is required\n"); return 1; }
+    onx::Model rec = onx::load_model(rec_path);
+    ctc::Dict dict = ctc::parse_dict(read_file(dict_path));
+    printf("rec: %zu nodes, dict %zu classes\n", rec.g.nodes.size(), dict.size());
+
+    // Resuming: apply a previous fine-tune before training further.
+    const char* resume = arg_str(argc, argv, "--resume", nullptr);
+    if (resume) {
+      int n = 0;
+      if (trainrec::load_weights(resume, rec.w, &n)) printf("resumed %d weights from %s\n", n, resume);
+    }
+
+    std::vector<trainrec::Sample> data = trainrec::load_list(list);
+    if (data.empty()) { printf("train: %s has no usable lines\n", list); return 1; }
+    std::vector<trainrec::Sample> val;
+    if (const char* vp = arg_str(argc, argv, "--val", nullptr)) val = trainrec::load_list(vp);
+    printf("data: %zu train, %zu val\n", data.size(), val.size());
+
+    trainrec::Config tc;
+    tc.steps = (int)arg_num(argc, argv, "--steps", tc.steps);
+    tc.batch = (int)arg_num(argc, argv, "--batch", tc.batch);
+    tc.lr = (float)arg_num(argc, argv, "--lr", tc.lr);
+    tc.clip = (float)arg_num(argc, argv, "--clip", tc.clip);
+    tc.eval_every = (int)arg_num(argc, argv, "--eval-every", tc.eval_every);
+    tc.img_h = (int)arg_num(argc, argv, "--img-h", 48);   // cfg is built below, after the --img check
+    tc.seed = (uint32_t)arg_num(argc, argv, "--seed", tc.seed);
+
+    if (!val.empty()) {
+      trainrec::EvalResult e = trainrec::evaluate(rec, dict, val, load_bgr_soft, tc.img_h, 200);
+      printf("before: val exact %.1f%% (%zu/%zu)\n", 100.0 * e.acc(), e.hit, e.seen);
+    }
+    std::vector<std::string> names = trainrec::train(rec, dict, data, val, load_bgr_soft, tc);
+    if (!val.empty()) {
+      trainrec::EvalResult e = trainrec::evaluate(rec, dict, val, load_bgr_soft, tc.img_h, 200);
+      printf("after:  val exact %.1f%% (%zu/%zu)\n", 100.0 * e.acc(), e.hit, e.seen);
+    }
+
+    const char* out = arg_str(argc, argv, "--out", "rec_finetuned.bin");
+    std::vector<Tensor> ps;
+    for (const auto& nm : names) ps.push_back(rec.w.f[nm]);
+    if (trainrec::save_weights(out, names, ps))
+      printf("wrote %s (%zu tensors)\n", out, names.size());
     return 0;
   }
 
@@ -227,6 +308,7 @@ int main(int argc, char** argv) {
 
   if (cmd == "rec") {
     onx::Model rec = onx::load_model(rec_path);
+    apply_weights(rec);
     ctc::Dict dict = ctc::parse_dict(read_file(dict_path));
     printf("dict %zu classes\n", dict.size());
     Tensor x = im::rec_input(img, cfg.rec_img_h);
@@ -262,6 +344,7 @@ int main(int argc, char** argv) {
   if (cmd != "run") { printf("unknown command '%s'\n", cmd.c_str()); return 1; }
 
   onx::Model rec = onx::load_model(rec_path);
+  apply_weights(rec);
   ctc::Dict dict = ctc::parse_dict(read_file(dict_path));
   printf("rec: %zu nodes, dict %zu classes\n", rec.g.nodes.size(), dict.size());
 

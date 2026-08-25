@@ -713,7 +713,7 @@ struct Model {
 
   // Same graph, with a tape. The returned tensor is the root of it: call backward() on a loss built
   // from it, then free_graph(). Not const — the weights in w accumulate gradients.
-  Tensor run_train(const Tensor& x) {
+  Tensor run_train(const Tensor& x) {   // x is const-ref but its grad buffer may be filled in
     // Every float weight needs somewhere for a gradient to land, whether or not the optimiser will
     // ever use it. These are two different questions and conflating them segfaults: the Pow
     // exponent is not a parameter, but it IS a parent on the tape, and gr::pow's backward writes
@@ -722,6 +722,12 @@ struct Model {
       Tensor& t = kv.second;
       if (t && t->grad.size() != t->data.size()) t->grad.assign(t->data.size(), 0.f);
     }
+    // The input needs one too. Nobody optimises the pixels, but the first convolution's backward
+    // writes dx into them regardless, and whether the tensor has the buffer depends on what
+    // infer_only() happened to be when the caller built it — which is true after any inference run
+    // and false at program start. That difference is why a training loop that evaluates first
+    // crashes while the same code without the evaluation does not.
+    if (x && x->grad.size() != x->data.size()) x->grad.assign(x->data.size(), 0.f);
     std::vector<std::string> want;
     if (!out_name.empty()) want.push_back(out_name);
     auto res = run_graph(g, {{in_name, x}}, want, false, &w, nullptr, true);

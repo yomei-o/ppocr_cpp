@@ -273,6 +273,44 @@ protobuf を再エンコードせずに済み、fine-tune を後から捨てら�
 **バッチは 1 枚ずつ別々の前向き**で、パディングして 1 本のテンソルにはしない。認識モデルの入力は
 横幅が可変で、バッチ内の最大幅に合わせると**モデルが見る絵そのものが変わる**。
 
+### Python でも同じことができる
+
+```sh
+pip install torch onnx onnx2torch
+python tools/train_ref.py --data scratch/recdata/train.txt --val scratch/recdata/val.txt                           --steps 60 --batch 4 --lr 2e-4 --eval-every 20 --out ft_py.bin
+```
+
+```
+rec: 404 nodes (342 constants folded in), dict 18385 classes
+before: val exact 31.2% (25/80)
+training 68 tensors (4.10 M values) on 300 samples
+  step    20  loss   0.0910   val exact 100.0% (80/80)
+after:  val exact 100.0% (80/80)
+```
+
+**同じ重みファイル形式**なので、Python で学習して C++ で推論できる（逆も）:
+
+```
+--- 素:                    周波数/取扱説明書   (conf 0.939)
+--- C++ の ft.bin:         周波数／取扱説明書  (conf 1.000)
+--- Python の ft_py.bin:   周波数／取扱説明書  (conf 1.000)
+```
+
+こちらは **PyTorch の autograd** で逆伝播する。同じ ONNX グラフ・同じ 68 テンソル・同じ CTC で、
+逆伝播の実装だけが違うので、`pure/onnx_grad.hpp` の 30 個のどれかに符号や軸の間違いがあれば
+2 つは食い違う。**重複ではなく相互検証**。
+
+素の val が 32.5% と 31.2% で 1 サンプルずれるのは、cv2.resize と `im::rec_input` の
+リサイズが完全一致ではないため。学習の話ではない。
+
+ONNX 側で 2 つ手当てが要る（どちらも `tools/train_ref.py` の中）:
+
+- Paddle のエクスポートは**重みを initializer ではなく `Constant` ノード**で書く。C++ の
+  インタプリタは両者を区別しないので気づかなかったが、onnx2torch は initializer しか見ないので
+  最初の Conv で KeyError になる
+- 変換すると**元の ONNX 名が消える**。重みファイルは名前で引くので、内容のハッシュで対応を取り、
+  一意に決まらなければ**そこで落とす**（黙って別のテンソルに書き込む方が危ない）
+
 ### 推論経路は 1 ビットも変わっていない
 
 `run_graph(..., train)` が切り替えるのは 3 点だけで、**op のディスパッチは 1 本のまま**:

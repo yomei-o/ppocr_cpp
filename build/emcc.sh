@@ -4,6 +4,9 @@
 #
 #   sh build/emcc.sh wasm/ppocr_wasm.cpp -o wasm/ppocr.js
 set -e
+
+# Below-normal priority so a parallel build does not make the rest of the desktop stutter.
+. "$(dirname "$0")/lowpri.sh"
 EMSDK="${EMSDK:-/c/prog/emsdk/emsdk}"
 EMCC="$EMSDK/upstream/emscripten/emcc.py"
 [ -f "$EMCC" ] || { echo "emcc.py not found at $EMCC — run: cd $EMSDK && ./emsdk install latest"; exit 1; }

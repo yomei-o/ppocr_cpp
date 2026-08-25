@@ -4,6 +4,9 @@
 #   EXTRA="-fopenmp" sh build/gcc.sh ...                 # OpenMP
 #   EXTRA="-DUSE_EIGEN -mavx2 -mfma" sh build/gcc.sh ...  # Eigen CPU fast path
 set -e
+
+# Below-normal priority so a parallel build does not make the rest of the desktop stutter.
+. "$(dirname "$0")/lowpri.sh"
 SRC="$1"; shift
 OUT="ppocr.exe"
 if [ "$1" = "-o" ]; then OUT="$2"; shift 2; fi

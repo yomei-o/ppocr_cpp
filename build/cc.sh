@@ -6,6 +6,9 @@
 #   EXTRA="-DUSE_EIGEN -arch:AVX2" sh build/cc.sh ...    # Eigen CPU fast path
 set -e
 
+# Below-normal priority so a parallel build does not make the rest of the desktop stutter.
+. "$(dirname "$0")/lowpri.sh"
+
 VSROOT="/c/Program Files/Microsoft Visual Studio/2022"
 MSVC_DIR=$(ls -d "$VSROOT"/*/VC/Tools/MSVC/* 2>/dev/null | sort -V | tail -1)
 SDK_INC=$(ls -d "/c/Program Files (x86)/Windows Kits/10/Include"/* 2>/dev/null | sort -V | tail -1)

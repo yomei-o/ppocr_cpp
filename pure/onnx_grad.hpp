@@ -322,6 +322,14 @@ inline Tensor reduce_mean(const Tensor& x, const std::vector<int64_t>& axes, boo
     const size_t R = xs.size();
     std::vector<char> red(R, 0);
     int64_t K = 1;
+    if (axes.empty()) {
+      // No axes means reduce every one of them -- the forward in nn_ops.hpp expands it that way,
+      // but it takes `axes` BY VALUE, so the expansion never reaches the copy captured here. Left
+      // out, K stays 1 and red stays all-zero, and the backward of a MEAN behaves like the backward
+      // of a SUM: the gradient comes out scaled by the element count. It descends in the right
+      // direction with the wrong step size, which is why nothing notices.
+      for (size_t d = 0; d < R; ++d) { red[d] = 1; K *= xs[d]; }
+    }
     for (int64_t a : axes) {
       const size_t d = (size_t)(a < 0 ? a + (int64_t)R : a);
       red[d] = 1;

@@ -147,6 +147,11 @@ int main() {
         [](const Tensor& x) { return gr::reduce_mean(x, {2}, true); });
   check("reduce_mean_2ax", rand_tensor({2, 3, 4}),
         [](const Tensor& x) { return gr::reduce_mean(x, {1, 2}, false); });
+  // Empty axes: ONNX reads that as "reduce every axis". Both cases above NAME their axes, which is
+  // why the backward could divide by 1 instead of by the element count and stay hidden -- the
+  // analytic gradient came out exactly 24x the numeric one here.
+  check("reduce_mean_allax", rand_tensor({2, 3, 4}),
+        [](const Tensor& x) { return gr::reduce_mean(x, {}, false); });
 
   // matmul, including the case the recogniser actually uses: one weight matrix applied to every
   // time step, so the weight's gradient is a sum over the batch.
